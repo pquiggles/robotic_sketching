@@ -10,7 +10,7 @@ Build the code using:
  
  Run the simulation and a python client that sketches the expected output using: ```$ python client.py```.
  
- ## Graph Format 
+## Graph Format 
  
  This simulation creates sketch created by a directed graph data structure. One can specify the graph to sketch by editing ``graph_representation.txt``. The nodes in the graph are specified line by line
  
