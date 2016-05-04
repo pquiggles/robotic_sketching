@@ -23,7 +23,7 @@ Build the code using:
  
  **For now, keep x and y of each node between -.2 and .2 to avoid moving out of the robot workspace.**
  
- ## Todo
+## Todo
  Currently the simulating does not account for nodes with multiple neighborsIt also ignores user-specified node ids, and just increments the node id in order
 
 
