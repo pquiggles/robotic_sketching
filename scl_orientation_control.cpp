@@ -54,6 +54,7 @@ scl. If not, see <http://www.gnu.org/licenses/>.
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <stack>
 
 
 
@@ -65,22 +66,41 @@ void readGraph();
 std::vector<std::string> split(const std::string &s, char delim, std::vector<std::string> &elems);
 std::vector<std::string> split(const std::string &s, char delim);
 
+
+class Edge;
+
 class Vertex
 {
  public:
   int id;
   double x;
   double y;
-  std::vector<Vertex *> neighbors;
   bool visited;
-  Vertex(){
-    id=0;
-    x =0;
-    y =0;
+  std::vector<Edge *> neighbors;
+  Vertex()
+  {
     visited = false;
+    id = 0;
+    x = 0;
+    y = 0;
   }
 };
 
+class Edge
+{
+  public:
+    Vertex * start;
+    Vertex * end;
+    bool visited;
+    Edge(Vertex * v1, Vertex * v2)
+    {
+      start = v1;
+      end = v2;
+      visited = false;
+    }
+};
+
+std::stack <Edge *> edges_to_visit;
 class PointGraph
 {
 public:
@@ -137,7 +157,8 @@ void readGraph()
     {
       int neighborIdx = std::stoi(tokens[4 + j] ,&sz);
       Vertex * neighbor = pg.vertices[neighborIdx];
-      pg.vertices[i]->neighbors.push_back(neighbor);
+      Edge * e =  new Edge(pg.vertices[i], neighbor);
+      pg.vertices[i]->neighbors.push_back(e);
     }
 
   }
@@ -259,6 +280,10 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
   R_des.resize(3,3);
 
   Vertex * target_vertex = pg.vertices[0];
+  target_vertex->visited = true;
+  bool returning = false;
+  bool pulled_away = false;
+  Edge * returningEdge = NULL;
   while(true == scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running)
   {
     //get current time and compute the model
@@ -283,13 +308,9 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     // gains    
     double kp = 500;
     double ko = 200;
-    double kv = 100;
+    double kv = 70;
 
-
-    // position trajectory parameters
-    double sin_ampl = 0.15;
-    double frequency = 0.3;
-    double x_offs = .3 ;
+    double x_offs = pulled_away ? 0.0 : 0.3 ;
 
 
     double y_offs = .3 + target_vertex->x;
@@ -303,18 +324,71 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     Eigen::VectorXd dx = (x - x_des);
     if(dx.norm() < .01)
       {
-        if ( target_vertex->neighbors.size() > 0 )
+        if(pulled_away)
         {
-          target_vertex = target_vertex->neighbors[0];
-          double x_offs = .3 ;
-          double y_offs = .3 + target_vertex->x;
-          double z_offs = -.2 + target_vertex->y;
-
-          std::cout << "NEW NEIGHBOR: " << target_vertex->x << " , " << target_vertex->y << std::endl; 
-          x_des << x_offs, y_offs, z_offs;
-          x_des += x_init;
-          dx = (x - x_des); 
+            pulled_away = false;
         }
+        else if (returning)
+        {
+            returning = false;
+            target_vertex = returningEdge->end;
+          
+        }
+        else if ( target_vertex->neighbors.size() > 0 )
+        {
+          if ( target_vertex->neighbors.size() > 1 )
+          {
+            for (uint i = 1; i < target_vertex->neighbors.size(); i++)
+            {
+              if (!target_vertex->neighbors[i]->visited)
+              {
+                edges_to_visit.push(target_vertex->neighbors[i]);
+              }
+              
+            }
+          }
+          if(!target_vertex->neighbors[0]->visited)
+          {
+            target_vertex->neighbors[0]->visited = true;
+            target_vertex = target_vertex->neighbors[0]->end;
+          }
+        }
+        else if ( !edges_to_visit.empty() )
+        {
+          returning = true;
+          pulled_away = true;
+          returningEdge =  edges_to_visit.top();
+          edges_to_visit.pop();
+          returningEdge->visited = true;
+          target_vertex = returningEdge->start;
+        }
+        else 
+        {
+          bool nextVertexFound = false;
+          for (unsigned int i = 0; i < pg.vertices.size(); i++)
+          {
+            if (!pg.vertices[i]->visited)
+            {
+              target_vertex = pg.vertices[i];
+              target_vertex->visited = true;
+              nextVertexFound = true;
+              pulled_away = true;
+              break;
+            }
+          }
+          if ( !nextVertexFound )
+          {
+            break;
+          }
+        }
+        double x_offs = pulled_away ? 0.0 : 0.3 ;
+        double y_offs = .3 + target_vertex->x;
+        double z_offs = -.2 + target_vertex->y;
+        target_vertex->visited = true;
+
+        x_des << x_offs, y_offs, z_offs;
+        x_des += x_init;
+        dx = (x - x_des); 
       }  
 
     // current and desired orientations
@@ -336,7 +410,6 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     }
 
     d_phi *= -.5;
-
     // current velocity
     Eigen::VectorXd dv = J * rio.sensors_.dq_;
 
