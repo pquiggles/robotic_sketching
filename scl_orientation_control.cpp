@@ -55,22 +55,37 @@ scl. If not, see <http://www.gnu.org/licenses/>.
 #include <fstream>
 #include <string>
 #include <stack>
+#include <float.h>
+
+#include <zmqpp/zmqpp.hpp>
+
+ void jointSpaceControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
+ void opSpacePositionControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
+ void opSpaceOrientationControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
+ void opSpacePositionOrientationControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
+ void readGraph();
+ std::vector<std::string> split(const std::string &s, char delim, std::vector<std::string> &elems);
+ std::vector<std::string> split(const std::string &s, char delim);
 
 
+const double X_OFFS_MAX = 0;
+const double X_OFFS_MIN = -.25;
 
-void jointSpaceControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
-void opSpacePositionControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
-void opSpaceOrientationControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
-void opSpacePositionOrientationControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
-void readGraph();
-std::vector<std::string> split(const std::string &s, char delim, std::vector<std::string> &elems);
-std::vector<std::string> split(const std::string &s, char delim);
+const double Y_OFFS_MIN = -.1;
+const double Y_OFFS_MAX = .1;
+
+
+const double ON_CANVAS_Z_OFFS = -.1;
+const double OFF_CANVAS_Z_OFFS = -.05;
 
 
 class Edge;
+bool zmqInitialized = false;
 
-class Vertex
-{
+
+
+ class Vertex
+ {
  public:
   int id;
   double x;
@@ -88,43 +103,170 @@ class Vertex
 
 class Edge
 {
-  public:
-    Vertex * start;
-    Vertex * end;
-    bool visited;
-    Edge(Vertex * v1, Vertex * v2)
-    {
-      start = v1;
-      end = v2;
-      visited = false;
-    }
+public:
+  Vertex * start;
+  Vertex * end;
+  bool visited;
+  Edge(Vertex * v1, Vertex * v2)
+  {
+    start = v1;
+    end = v2;
+    visited = false;
+  }
 };
 
-std::stack <Edge *> edges_to_visit;
 class PointGraph
 {
 public:
   std::vector<Vertex *> vertices;
-  PointGraph(){
+  bool pulled_away;
+  bool returning;
+  Edge * returningEdge;
+  Vertex * target_vertex;
+  std::stack <Edge *> edges_to_visit;
+
+
+  PointGraph()
+  {
+    pulled_away = true;
+    returning = false;
+    returningEdge = NULL;
+    target_vertex= NULL;
+  }
+
+  bool isPulledAway()
+  {
+    return pulled_away;
+  }
+
+  Vertex * getNextTarget()
+  {
+
+    if(pulled_away)
+    {
+      pulled_away = false;
+    }
+    else if (returning)
+    {
+      returning = false;
+      target_vertex = returningEdge->end;
+    }
+    else if ( target_vertex->neighbors.size() > 0 )
+    {
+      if ( target_vertex->neighbors.size() > 1 )
+      {
+        for (uint i = 1; i < target_vertex->neighbors.size(); i++)
+        {
+          if (!target_vertex->neighbors[i]->visited)
+          {
+            edges_to_visit.push(target_vertex->neighbors[i]);
+          }          
+        }
+      }
+      if(true)
+      {
+        target_vertex->neighbors[0]->visited = true;
+        target_vertex = target_vertex->neighbors[0]->end;
+      }
+    }
+    else if ( !edges_to_visit.empty() )
+    {
+      returning = true;
+      pulled_away = true;
+      returningEdge =  edges_to_visit.top();
+      edges_to_visit.pop();
+      returningEdge->visited = true;
+      target_vertex = returningEdge->start;
+    }
+    else 
+    {
+      target_vertex = NULL;
+      for (unsigned int i = 0; i < vertices.size(); i++)
+      {
+        if (!vertices[i]->visited)
+        {
+          std::cout << "FOUND VERTEX: " << i << std::endl;
+          target_vertex = vertices[i];
+          target_vertex->visited = true;
+          pulled_away = true;
+          break;
+        }
+      }
+    }
+    if (target_vertex != NULL)
+      target_vertex->visited = true;
+    return target_vertex;
+  }
+
+  Vertex * getFirtVertex()
+  {
+    if(vertices.size() > 0)
+    {
+      target_vertex = vertices[0];
+      target_vertex->visited = true;
+      return vertices[0];
+    }
+    return NULL;
+  }
+
+  void renormalize(){
+    double x_min, y_min, x_max, y_max;
+    x_min = DBL_MAX;
+    y_min = DBL_MAX;
+    x_max = -DBL_MAX;
+    y_max = -DBL_MAX;
+    
+    for(uint i = 0; i < vertices.size(); i++)
+    {
+      if( vertices[i]->x < x_min ){
+        x_min = vertices[i]->x;
+      }
+      if( vertices[i]->x > x_max ){
+        x_max = vertices[i]->x;
+      }
+      if (vertices[i]->y < y_min){
+        y_min = vertices[i]->y;
+      }
+      if (vertices[i]->y > y_max){
+        y_max = vertices[i]->y;
+      }
+    }
+    double x_range = x_max - x_min;
+    double y_range = y_max - y_min;
+    double scaling_factor;
+    if (x_range > y_range)
+    {
+      scaling_factor = (X_OFFS_MAX - X_OFFS_MIN) / x_range;
+    }
+    else
+    {
+      scaling_factor = (Y_OFFS_MAX - Y_OFFS_MIN) / y_range;
+    }
+    // rescale
+    for (uint i = 0; i < vertices.size(); i++)
+    {
+      vertices[i]->x = X_OFFS_MIN + scaling_factor * ( vertices[i]->x - x_min);
+      vertices[i]->y = Y_OFFS_MIN + scaling_factor * ( vertices[i]->y - y_min);
+    }
   }
 };
 
 PointGraph pg;
 
 std::vector<std::string> split(const std::string &s, char delim, std::vector<std::string> &elems) {
-    std::stringstream ss(s);
-    std::string item;
-    while (std::getline(ss, item, delim)) 
-    {
-        elems.push_back(item);
-    }
-    return elems;
+  std::stringstream ss(s);
+  std::string item;
+  while (std::getline(ss, item, delim)) 
+  {
+    elems.push_back(item);
+  }
+  return elems;
 }
 
 std::vector<std::string> split(const std::string &s, char delim) {
-    std::vector<std::string> elems;
-    split(s, delim, elems);
-    return elems;
+  std::vector<std::string> elems;
+  split(s, delim, elems);
+  return elems;
 }
 
 void readGraph()
@@ -140,7 +282,7 @@ void readGraph()
   pg.vertices.resize(num_vertices);
   for (int i = 0; i < num_vertices; i++)
   {
-    
+
     Vertex * v = new Vertex();
     pg.vertices[i] = v;
   }
@@ -149,7 +291,7 @@ void readGraph()
   {
     std::getline(infile, line);
     std::vector<std::string> tokens = split(line, ' ');
-  
+
     pg.vertices[i]->x = atof(tokens[1].c_str());
     pg.vertices[i]->y = atof(tokens[2].c_str());
     int num_neighbors= std::stoi(tokens[3] ,&sz);
@@ -163,6 +305,7 @@ void readGraph()
 
   }
   infile.close();
+  pg.renormalize();
 }
 
 
@@ -177,8 +320,8 @@ void readGraph()
  * 4. dynamics (control matrices)
  * 4. graphics (chai)
  * */
-int main(int argc, char** argv)
-{
+ int main(int argc, char** argv)
+ {
   std::cout<<"\n***************************************\n";
   std::cout<<"Standard Control Library Control Types";
   std::cout<<"\n***************************************\n";
@@ -238,7 +381,7 @@ int main(int argc, char** argv)
     else  //Read the rio data structure and updated rendererd robot..
       while(true == scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running)
       { glutMainLoopEvent(); const timespec ts = {0, 15000000};/*15ms*/ nanosleep(&ts,NULL); }
-  }
+    }
 
   /******************************Exit Gracefully************************************/
   std::cout<<"\n\nExecuted Successfully";
@@ -246,6 +389,82 @@ int main(int argc, char** argv)
 
   return 0;
 }
+
+
+
+
+
+void sendToRobot(scl::SRobotIO &robot_)
+  {
+      // Initialize a 0MQ publisher socket
+      static zmqpp::context context;
+      static zmqpp::socket pub(context, zmqpp::socket_type::publish);
+
+      if (!zmqInitialized)
+      {
+          // Need to pair this with the endpoint port in ROS code
+          pub.bind("tcp://*:3883");
+          zmqInitialized = true;
+      }
+      // TODO: Is data lock needed here?
+      else
+      {
+          zmqpp::message msg;
+          Eigen::VectorXd q;
+          q = robot_.sensors_.q_;
+          msg << std::to_string(q[0]) + " " +
+                     std::to_string(q[1]) + " " +
+                     std::to_string(q[2]) + " " +
+                     std::to_string(-q[3]) + " " +  // joint 3 is inverted
+                     std::to_string(q[4]) + " " +
+                     std::to_string(q[5]) + " " +
+                     std::to_string(q[6]);
+
+          
+          std::cout << "SENDING POSITIONS: " << q << std::endl;
+          pub.send(msg);
+      }
+  }
+
+
+static bool initialized = false;
+bool receiveFromRobot(Eigen::VectorXd &q)
+  {
+    bool flag=true;
+    // Initialize a 0MQ subscriber socket
+    static zmqpp::context context;
+    static zmqpp::socket sub(context, zmqpp::socket_type::subscribe);
+    
+
+    if (!initialized)
+    {
+      sub.subscribe("");
+      sub.connect("tcp://localhost:3884");
+      initialized = true;
+      return false;
+    }
+    else
+    {
+      zmqpp::message message;
+      if (sub.receive(message, true))
+      {
+        std::string msg;
+        message >> msg;
+        std::stringstream msg_stream(msg);
+
+        // Read the current joint positions from the robot
+        Eigen::VectorXd q_received, dq_received;
+        q_received.resize(7);
+        msg_stream >> q_received[0] >> q_received[1] >> q_received[2] >> q_received[3] >> q_received[4] >> q_received[5] >> q_received[6];
+        //>> dq_received[0] >> dq_received[1] >> dq_received[2] >> dq_received[3] >> dq_received[4] >> dq_received[5] >> dq_received[6]
+
+        q = q_received;
+      }
+      else
+      { return false; }
+    }
+    return flag;
+  }
 
 
 void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, scl::CDynamicsScl& dyn_scl, scl::CDynamicsTao &dyn_tao)
@@ -256,8 +475,8 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
   bool flag = false;
 
   std::cout<<"\n\n***************************************************************"
-      <<"\n Starting op space position + orientation controller..."
-      <<"\n***************************************************************\n";
+  <<"\n Starting op space position + orientation controller..."
+  <<"\n***************************************************************\n";
   tstart = sutil::CSystemClock::getSysTime(); iter = 0;
 
   scl::SRigidBodyDyn *rhand = rgcm.rbdyn_tree_.at("end-effector");
@@ -279,13 +498,26 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
 
   R_des.resize(3,3);
 
-  Vertex * target_vertex = pg.vertices[0];
-  target_vertex->visited = true;
-  bool returning = false;
-  bool pulled_away = false;
-  Edge * returningEdge = NULL;
+  Vertex * target_vertex = pg.getFirtVertex();
+  bool firstRun = true;
+  bool robotEnabled = false;
+
+
   while(true == scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running)
   {
+    Eigen::VectorXd q_recv_;
+    if (firstRun && !robotEnabled && receiveFromRobot(q_recv_))
+    {
+      firstRun = false;
+      std::cout << "Q Received! " << q_recv_ << std::endl;
+      rio.sensors_.q_ = q_recv_;
+      robotEnabled = true;
+      for(int i = 0; i < 7; i++)
+        rio.sensors_.dq_[i] = 0;      
+    }
+
+
+
     //get current time and compute the model
     tcurr = sutil::CSystemClock::getSysTime();
     dyn_scl.computeGCModel(&rio.sensors_,&rgcm);
@@ -308,13 +540,11 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     // gains    
     double kp = 500;
     double ko = 200;
-    double kv = 70;
+    double kv = 75;
 
-    double x_offs = pulled_away ? 0.0 : 0.3 ;
-
-
-    double y_offs = .3 + target_vertex->x;
-    double z_offs = -.2 + target_vertex->y;
+    double x_offs = target_vertex->x;
+    double y_offs =  target_vertex->y;
+    double z_offs =  pg.isPulledAway() ? OFF_CANVAS_Z_OFFS : ON_CANVAS_Z_OFFS;
 
     // current and desired position 
     Eigen::VectorXd x = rhand->T_o_lnk_ * hpos;
@@ -323,79 +553,26 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     x_des += x_init;
     Eigen::VectorXd dx = (x - x_des);
     if(dx.norm() < .01)
-      {
-        if(pulled_away)
-        {
-            pulled_away = false;
-        }
-        else if (returning)
-        {
-            returning = false;
-            target_vertex = returningEdge->end;
-          
-        }
-        else if ( target_vertex->neighbors.size() > 0 )
-        {
-          if ( target_vertex->neighbors.size() > 1 )
-          {
-            for (uint i = 1; i < target_vertex->neighbors.size(); i++)
-            {
-              if (!target_vertex->neighbors[i]->visited)
-              {
-                edges_to_visit.push(target_vertex->neighbors[i]);
-              }
-              
-            }
-          }
-          if(!target_vertex->neighbors[0]->visited)
-          {
-            target_vertex->neighbors[0]->visited = true;
-            target_vertex = target_vertex->neighbors[0]->end;
-          }
-        }
-        else if ( !edges_to_visit.empty() )
-        {
-          returning = true;
-          pulled_away = true;
-          returningEdge =  edges_to_visit.top();
-          edges_to_visit.pop();
-          returningEdge->visited = true;
-          target_vertex = returningEdge->start;
-        }
-        else 
-        {
-          bool nextVertexFound = false;
-          for (unsigned int i = 0; i < pg.vertices.size(); i++)
-          {
-            if (!pg.vertices[i]->visited)
-            {
-              target_vertex = pg.vertices[i];
-              target_vertex->visited = true;
-              nextVertexFound = true;
-              pulled_away = true;
-              break;
-            }
-          }
-          if ( !nextVertexFound )
-          {
-            break;
-          }
-        }
-        double x_offs = pulled_away ? 0.0 : 0.3 ;
-        double y_offs = .3 + target_vertex->x;
-        double z_offs = -.2 + target_vertex->y;
-        target_vertex->visited = true;
+    {
+      target_vertex = pg.getNextTarget();
+      if(target_vertex == NULL)
+        return;
+      double x_offs = target_vertex->x ;
+      double y_offs = target_vertex->y;
+      double z_offs = pg.isPulledAway() ? OFF_CANVAS_Z_OFFS : ON_CANVAS_Z_OFFS;
 
-        x_des << x_offs, y_offs, z_offs;
-        x_des += x_init;
-        dx = (x - x_des); 
-      }  
+      std::cout << "Going to target " << target_vertex->x  << " , " << target_vertex->y << std::endl;
+
+      x_des << x_offs, y_offs, z_offs;
+      x_des += x_init;
+      dx = (x - x_des);
+    }  
 
     // current and desired orientations
     R = rhand->T_o_lnk_.rotation();
-    R_des << cos(M_PI / 3), 0, sin(M_PI / 3),
-                        0,  1, 0,
-                -sin(M_PI / 3), 0, cos(M_PI / 3);   
+    R_des << -1, 0, 0,
+    0,  1, 0,
+    0, 0, -1;   
     
     // angular error vector
     Eigen::Vector3d d_phi;
@@ -423,7 +600,7 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     F = Lambda * - ( dp + kv * dv); 
     
     // joint space gravity
-    Fg << 0, 0, -9.8, 0, 0, 0;
+    Fg << 0, 0, -9.81, 0, 0, 0;
     g = J.transpose() * Fg;
 
     // joint torques
@@ -435,26 +612,35 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     Eigen::MatrixXd J_bar = A_inv*J.transpose()*Lambda;
     ns_damping = (Eigen::MatrixXd::Identity(6,6)-J.transpose()*J_bar.transpose())*rio.sensors_.dq_;
 
-    rio.actuators_.force_gc_commanded_ = Gamma  - 15.0*ns_damping;
+    rio.actuators_.force_gc_commanded_ = Gamma  - 30.0*ns_damping;
 
 
     // Integrate the dynamics
     dyn_tao.integrate(rio,dt); iter++; const timespec ts = {0, 5000};/*.05ms*/ nanosleep(&ts,NULL);
 
+    if(!firstRun && iter % 8 == 0)
+    {
+      //rio.sensors_.q_ = q_recv_;
+      sendToRobot(rio);
+    }
+
+    robotEnabled = false;
+
+
+
+
     // print output
     if(iter % 1000 == 0)
     {
-       std::cout <<"\nDx norm:"<< dx.norm() << std::endl;
-       std::cout<<"\n" << tcurr << " " << x.transpose() << " " << x_des.transpose() << " " <<d_phi.transpose();
-       std::cout.flush();
-    }
+      std::cout <<"\nDx norm:"<< dx.norm() << std::endl;
+      std::cout<<"\n" << tcurr << " " << x.transpose() << " " << x_des.transpose() << " " <<d_phi.transpose();
+     std::cout.flush();
+   }
 
     /*********************************************************/
     /*********************************************************/
     /*************     END OF YOUR CODE     ******************/
     /*********************************************************/
     /*********************************************************/
-  }
+ }
 }
-
-
