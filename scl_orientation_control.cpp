@@ -570,9 +570,9 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
 
     // current and desired orientations
     R = rhand->T_o_lnk_.rotation();
-    R_des << -1, 0, 0,
+    R_des << 0, 0, 1,
     0,  1, 0,
-    0, 0, -1;   
+    -1, 0, 0;   
     
     // angular error vector
     Eigen::Vector3d d_phi;
