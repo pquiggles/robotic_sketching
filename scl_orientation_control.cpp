@@ -57,7 +57,7 @@ scl. If not, see <http://www.gnu.org/licenses/>.
 #include <stack>
 #include <float.h>
 
-#include <zmqpp/zmqpp.hpp>
+// #include <zmqpp/zmqpp.hpp>
 
  void jointSpaceControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
  void opSpacePositionControl(scl::SRobotIO& , scl::SGcModel& , scl::CDynamicsScl& , scl::CDynamicsTao&);
@@ -68,19 +68,19 @@ scl. If not, see <http://www.gnu.org/licenses/>.
  std::vector<std::string> split(const std::string &s, char delim);
 
 
-const double X_OFFS_MAX = 0;
+const double X_OFFS_MAX = 0.05;
 const double X_OFFS_MIN = -.25;
 
 const double Y_OFFS_MIN = -.1;
 const double Y_OFFS_MAX = .1;
 
 
-const double ON_CANVAS_Z_OFFS = -.1;
-const double OFF_CANVAS_Z_OFFS = -.05;
+const double ON_CANVAS_Z_OFFS = -.018;
+const double OFF_CANVAS_Z_OFFS = 0.05;
 
-
+double theta = M_PI/3;
 class Edge;
-bool zmqInitialized = false;
+// bool zmqInitialized = false;
 
 
 
@@ -92,13 +92,22 @@ bool zmqInitialized = false;
   double y;
   bool visited;
   std::vector<Edge *> neighbors;
+  bool isChild;
+
   Vertex()
   {
     visited = false;
     id = 0;
     x = 0;
     y = 0;
+    isChild = false;
   }
+
+  bool operator < (const Vertex & v) const
+  {
+    return y < v.y;
+  }
+
 };
 
 class Edge
@@ -145,6 +154,7 @@ public:
     if(pulled_away)
     {
       pulled_away = false;
+      return target_vertex;
     }
     else if (returning)
     {
@@ -160,14 +170,11 @@ public:
           if (!target_vertex->neighbors[i]->visited)
           {
             edges_to_visit.push(target_vertex->neighbors[i]);
-          }          
+          }         
         }
       }
-      if(true)
-      {
-        target_vertex->neighbors[0]->visited = true;
-        target_vertex = target_vertex->neighbors[0]->end;
-      }
+      target_vertex->neighbors[0]->visited = true;
+      target_vertex = target_vertex->neighbors[0]->end;
     }
     else if ( !edges_to_visit.empty() )
     {
@@ -178,7 +185,7 @@ public:
       returningEdge->visited = true;
       target_vertex = returningEdge->start;
     }
-    else 
+    else
     {
       target_vertex = NULL;
       for (unsigned int i = 0; i < vertices.size(); i++)
@@ -188,6 +195,9 @@ public:
           std::cout << "FOUND VERTEX: " << i << std::endl;
           target_vertex = vertices[i];
           target_vertex->visited = true;
+          if(target_vertex->neighbors.size() == 0 ||
+            target_vertex->isChild)
+            continue;
           pulled_away = true;
           break;
         }
@@ -215,7 +225,7 @@ public:
     y_min = DBL_MAX;
     x_max = -DBL_MAX;
     y_max = -DBL_MAX;
-    
+   
     for(uint i = 0; i < vertices.size(); i++)
     {
       if( vertices[i]->x < x_min ){
@@ -256,7 +266,7 @@ PointGraph pg;
 std::vector<std::string> split(const std::string &s, char delim, std::vector<std::string> &elems) {
   std::stringstream ss(s);
   std::string item;
-  while (std::getline(ss, item, delim)) 
+  while (std::getline(ss, item, delim))
   {
     elems.push_back(item);
   }
@@ -268,6 +278,8 @@ std::vector<std::string> split(const std::string &s, char delim) {
   split(s, delim, elems);
   return elems;
 }
+
+
 
 void readGraph()
 {
@@ -299,6 +311,7 @@ void readGraph()
     {
       int neighborIdx = std::stoi(tokens[4 + j] ,&sz);
       Vertex * neighbor = pg.vertices[neighborIdx];
+      neighbor->isChild = true;
       Edge * e =  new Edge(pg.vertices[i], neighbor);
       pg.vertices[i]->neighbors.push_back(e);
     }
@@ -306,6 +319,7 @@ void readGraph()
   }
   infile.close();
   pg.renormalize();
+  //std::sort(pg.vertices.begin(), pg.vertices.end());
 }
 
 
@@ -360,7 +374,7 @@ void readGraph()
   std::cout<<"\nIntegrating the r6bot's physics. \nWill test different controllers.\n Press (x) to exit at anytime.";
 
   omp_set_num_threads(2);
-  int thread_id; 
+  int thread_id;
 
 
 
@@ -374,7 +388,7 @@ void readGraph()
 
       readGraph();
       opSpacePositionOrientationControl(rio,rgcm,dyn_scl,dyn_tao);
-      
+     
       //Then terminate
       scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running = false;
     }
@@ -391,80 +405,77 @@ void readGraph()
 }
 
 
+// void sendToRobot(scl::SRobotIO &robot_)
+//   {
+//       // Initialize a 0MQ publisher socket
+//       static zmqpp::context context;
+//       static zmqpp::socket pub(context, zmqpp::socket_type::publish);
+
+//       if (!zmqInitialized)
+//       {
+//           // Need to pair this with the endpoint port in ROS code
+//           pub.bind("tcp://*:3883");
+//           zmqInitialized = true;
+//       }
+//       // TODO: Is data lock needed here?
+//       else
+//       {
+//           zmqpp::message msg;
+//           Eigen::VectorXd q;
+//           q = robot_.sensors_.q_;
+//           msg << std::to_string(q[0]) + " " +
+//                      std::to_string(q[1]) + " " +
+//                      std::to_string(q[2]) + " " +
+//                      std::to_string(-q[3]) + " " +  // joint 3 is inverted
+//                      std::to_string(q[4]) + " " +
+//                      std::to_string(q[5]) + " " +
+//                      std::to_string(q[6]);
+
+         
+//           std::cout << "SENDING POSITIONS: " << q << std::endl;
+//           pub.send(msg);
+//       }
+//   }
 
 
+// static bool initialized = false;
+// bool receiveFromRobot(Eigen::VectorXd &q)
+//   {
+//     bool flag=true;
+//     // Initialize a 0MQ subscriber socket
+//     static zmqpp::context context;
+//     static zmqpp::socket sub(context, zmqpp::socket_type::subscribe);
+   
 
-void sendToRobot(scl::SRobotIO &robot_)
-  {
-      // Initialize a 0MQ publisher socket
-      static zmqpp::context context;
-      static zmqpp::socket pub(context, zmqpp::socket_type::publish);
+//     if (!initialized)
+//     {
+//       sub.subscribe("");
+//       sub.connect("tcp://localhost:3884");
+//       initialized = true;
+//       return false;
+//     }
+//     else
+//     {
+//       zmqpp::message message;
+//       if (sub.receive(message, true))
+//       {
+//         std::string msg;
+//         message >> msg;
+//         std::stringstream msg_stream(msg);
 
-      if (!zmqInitialized)
-      {
-          // Need to pair this with the endpoint port in ROS code
-          pub.bind("tcp://*:3883");
-          zmqInitialized = true;
-      }
-      // TODO: Is data lock needed here?
-      else
-      {
-          zmqpp::message msg;
-          Eigen::VectorXd q;
-          q = robot_.sensors_.q_;
-          msg << std::to_string(q[0]) + " " +
-                     std::to_string(q[1]) + " " +
-                     std::to_string(q[2]) + " " +
-                     std::to_string(-q[3]) + " " +  // joint 3 is inverted
-                     std::to_string(q[4]) + " " +
-                     std::to_string(q[5]) + " " +
-                     std::to_string(q[6]);
+//         // Read the current joint positions from the robot
+//         Eigen::VectorXd q_received, dq_received;
+//         q_received.resize(7);
+//         msg_stream >> q_received[0] >> q_received[1] >> q_received[2] >> q_received[3] >> q_received[4] >> q_received[5] >> q_received[6];
+//         //>> dq_received[0] >> dq_received[1] >> dq_received[2] >> dq_received[3] >> dq_received[4] >> dq_received[5] >> dq_received[6]
 
-          
-          std::cout << "SENDING POSITIONS: " << q << std::endl;
-          pub.send(msg);
-      }
-  }
-
-
-static bool initialized = false;
-bool receiveFromRobot(Eigen::VectorXd &q)
-  {
-    bool flag=true;
-    // Initialize a 0MQ subscriber socket
-    static zmqpp::context context;
-    static zmqpp::socket sub(context, zmqpp::socket_type::subscribe);
-    
-
-    if (!initialized)
-    {
-      sub.subscribe("");
-      sub.connect("tcp://localhost:3884");
-      initialized = true;
-      return false;
-    }
-    else
-    {
-      zmqpp::message message;
-      if (sub.receive(message, true))
-      {
-        std::string msg;
-        message >> msg;
-        std::stringstream msg_stream(msg);
-
-        // Read the current joint positions from the robot
-        Eigen::VectorXd q_received, dq_received;
-        q_received.resize(7);
-        msg_stream >> q_received[0] >> q_received[1] >> q_received[2] >> q_received[3] >> q_received[4] >> q_received[5] >> q_received[6];
-        //>> dq_received[0] >> dq_received[1] >> dq_received[2] >> dq_received[3] >> dq_received[4] >> dq_received[5] >> dq_received[6]
-
-        q = q_received;
-      }
-      else
-      { return false; }
-    }
-    return flag;
-  }
+//         q = q_received;
+//       }
+//       else
+//       { return false; }
+//     }
+//     return flag;
+//   }
 
 
 void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, scl::CDynamicsScl& dyn_scl, scl::CDynamicsTao &dyn_tao)
@@ -491,30 +502,32 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
 
   // Define the matrices and vectors you will need
   Eigen::VectorXd Gamma;
-  Eigen::MatrixXd J, A, A_inv, Lambda, R, R_des, R_init, x_init;
+  Eigen::MatrixXd J, A, A_inv, Lambda, R, R_des, Rx, R_init, x_init;
   Eigen::Vector3d w;
   Eigen::VectorXd g, F;
   Eigen::VectorXd Fg(6);
+  Eigen::VectorXd q_init(7);
 
   R_des.resize(3,3);
+  Rx.resize(3,3);
 
   Vertex * target_vertex = pg.getFirtVertex();
-  bool firstRun = true;
-  bool robotEnabled = false;
+  // bool firstRun = true;
+  // bool robotEnabled = false;
 
 
   while(true == scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running)
   {
     Eigen::VectorXd q_recv_;
-    if (firstRun && !robotEnabled && receiveFromRobot(q_recv_))
-    {
-      firstRun = false;
-      std::cout << "Q Received! " << q_recv_ << std::endl;
-      rio.sensors_.q_ = q_recv_;
-      robotEnabled = true;
-      for(int i = 0; i < 7; i++)
-        rio.sensors_.dq_[i] = 0;      
-    }
+    // if (firstRun && !robotEnabled && receiveFromRobot(q_recv_))
+    // {
+    //   firstRun = false;
+    //   std::cout << "Q Received! " << q_recv_ << std::endl;
+    //   rio.sensors_.q_ = q_recv_;
+    //   robotEnabled = true;
+    //   for(int i = 0; i < 7; i++)
+    //     rio.sensors_.dq_[i] = 0;     
+    // }
 
 
 
@@ -523,13 +536,14 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     dyn_scl.computeGCModel(&rio.sensors_,&rgcm);
 
     // initial position
-    if(false == flag) 
-    { 
+    if(false == flag)
+    {
       x_init = rhand->T_o_lnk_ * hpos;
       rhand->T_o_lnk_.rotation();
-      flag = true; 
+      flag = true;
+      q_init = rio.sensors_.q_;
     }
-    
+   
     // Compute your Jacobians
     dyn_scl.computeJacobianWithTransforms(J,*rhand,rio.sensors_.q_,hpos);
 
@@ -537,16 +551,16 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     A = rgcm.M_gc_;
     A_inv = rgcm.M_gc_inv_;
 
-    // gains    
+    // gains   
     double kp = 500;
-    double ko = 200;
+    double ko = 400;
     double kv = 75;
 
     double x_offs = target_vertex->x;
     double y_offs =  target_vertex->y;
     double z_offs =  pg.isPulledAway() ? OFF_CANVAS_Z_OFFS : ON_CANVAS_Z_OFFS;
 
-    // current and desired position 
+    // current and desired position
     Eigen::VectorXd x = rhand->T_o_lnk_ * hpos;
     Eigen::VectorXd x_des(3);
     x_des << x_offs, y_offs, z_offs;
@@ -566,14 +580,16 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
       x_des << x_offs, y_offs, z_offs;
       x_des += x_init;
       dx = (x - x_des);
-    }  
+    } 
 
     // current and desired orientations
     R = rhand->T_o_lnk_.rotation();
     R_des << -1, 0, 0,
-    0,  1, 0,
-    0, 0, -1;   
-    
+              0, 1, 0,
+              0, 0, -1;  
+
+
+
     // angular error vector
     Eigen::Vector3d d_phi;
     d_phi << 0, 0, 0;
@@ -593,12 +609,12 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     // Operational space Inertia matrix
     Lambda = J * A_inv * J.transpose();
     Lambda = Lambda.inverse();
-    
+   
     // Operational space controller force
     Eigen::VectorXd dp(6);
-    dp << kp * dx, ko * d_phi;    
-    F = Lambda * - ( dp + kv * dv); 
-    
+    dp << kp * dx, ko * d_phi;   
+    F = Lambda * - ( dp + kv * dv);
+   
     // joint space gravity
     Fg << 0, 0, -9.81, 0, 0, 0;
     g = J.transpose() * Fg;
@@ -609,22 +625,38 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
 
 
     Eigen::VectorXd ns_damping(6);
+    
+    Eigen::VectorXd joint_drift(7);
+    Eigen::VectorXd ns_task(6);
     Eigen::MatrixXd J_bar = A_inv*J.transpose()*Lambda;
-    ns_damping = (Eigen::MatrixXd::Identity(6,6)-J.transpose()*J_bar.transpose())*rio.sensors_.dq_;
+    
+    Eigen::VectorXd damping_vec(7);
+    damping_vec = rio.sensors_.dq_;
 
-    rio.actuators_.force_gc_commanded_ = Gamma  - 30.0*ns_damping;
+
+    joint_drift = (q_init - rio.sensors_.q_);
+
+    ns_damping = (Eigen::MatrixXd::Identity(6,6)-J.transpose()*J_bar.transpose())*rio.sensors_.dq_;
+    
+
+    ns_task = (Eigen::MatrixXd::Identity(6,6)-J.transpose()*J_bar.transpose())*(joint_drift);
+
+
+    rio.actuators_.force_gc_commanded_ = Gamma  - 13.0*ns_damping + 13.0 * ns_task;
 
 
     // Integrate the dynamics
     dyn_tao.integrate(rio,dt); iter++; const timespec ts = {0, 5000};/*.05ms*/ nanosleep(&ts,NULL);
+    rio.sensors_.q_(6) = theta;
 
-    if(!firstRun && iter % 8 == 0)
-    {
-      //rio.sensors_.q_ = q_recv_;
-      sendToRobot(rio);
-    }
 
-    robotEnabled = false;
+    // if(!firstRun && iter % 8 == 0)
+    // {
+    //   //rio.sensors_.q_ = q_recv_;
+    //   sendToRobot(rio);
+    // }
+
+    // robotEnabled = false;
 
 
 
