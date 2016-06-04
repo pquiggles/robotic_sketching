@@ -68,17 +68,21 @@ scl. If not, see <http://www.gnu.org/licenses/>.
  std::vector<std::string> split(const std::string &s, char delim);
 
 
-const double X_OFFS_MAX = 0.03;
-const double X_OFFS_MIN = -.25;
+const double X_OFFS_MAX = 0.15;
+const double X_OFFS_MIN = -.12;
 
 const double Y_OFFS_MIN = -.15;
 const double Y_OFFS_MAX = .15;
 
 
-const double ON_CANVAS_Z_OFFS = -.020;
-const double OFF_CANVAS_Z_OFFS = 0.08;
+const double ON_CANVAS_Z_OFFS = 0.0175;
+const double OFF_CANVAS_Z_OFFS = 0.1;
 
-double theta = M_PI/3;
+
+double thetaPoses [] = { -1.0/2.0 * M_PI, 0.0,
+                       2.0/4.0 * M_PI, 3.03};
+double theta;
+bool theta_changed = false;
 class Edge;
 bool zmqInitialized = false;
 
@@ -90,6 +94,7 @@ bool zmqInitialized = false;
   int id;
   double x;
   double y;
+  uint thetaInd;
   bool visited;
   std::vector<Edge *> neighbors;
   bool isChild;
@@ -135,7 +140,8 @@ public:
   std::stack <Edge *> edges_to_visit;
   Vertex * next_target_vertex;
   bool finishing;
-
+  bool thetaUpdating;
+  bool thetaUpdatingSecond;
 
   PointGraph()
   {
@@ -145,6 +151,13 @@ public:
     target_vertex= NULL;
     next_target_vertex = NULL;
     finishing = false;
+    thetaUpdating = false;
+    thetaUpdatingSecond = false;
+  }
+
+  bool isThetaUpdating()
+  {
+    return thetaUpdating;
   }
 
   bool isPulledAway()
@@ -156,18 +169,35 @@ public:
   {
     if(pulled_away && next_target_vertex != NULL)
     {
+      std::cout << "HERE" << std::endl;
       target_vertex = next_target_vertex;
       next_target_vertex = NULL;
       target_vertex->visited = true;
       return target_vertex;
     }
-    else if(pulled_away){
+    else if(pulled_away && !thetaUpdating){
+      std::cout << "HERE1" << std::endl;
       if(finishing)
         return NULL;
-      std::cout << "Pulling forward" << std::endl;
-      pulled_away = false;
       target_vertex->visited = true;
+      thetaUpdatingSecond = true;
+      thetaUpdating = true;
       return target_vertex;
+    }
+    else if(thetaUpdating)
+    {
+      std::cout << "Pulling forward" << std::endl;
+
+      if(abs(theta - thetaPoses[target_vertex->thetaInd]) > .01 ){
+        theta = thetaPoses[target_vertex->thetaInd];
+        theta_changed = true;
+      }
+      if(thetaUpdatingSecond)
+        thetaUpdatingSecond = false;
+      else{
+        thetaUpdating = false;
+        pulled_away = false;
+      }
     }
     else if(returning)
     {
@@ -178,6 +208,7 @@ public:
     }
     else if ( target_vertex->neighbors.size() > 0 )
     {
+            std::cout << "HERE2" << std::endl;
       if ( target_vertex->neighbors.size() > 1 )
       {
         for (uint i = 1; i < target_vertex->neighbors.size(); i++)
@@ -186,7 +217,7 @@ public:
           {
             edges_to_visit.push(target_vertex->neighbors[i]);
             target_vertex->neighbors[i]->end->visited;
-          }        
+          }         
         }
       }
       target_vertex->neighbors[0]->visited = true;
@@ -200,6 +231,8 @@ public:
       edges_to_visit.pop();
       returningEdge->visited = true;
       next_target_vertex = returningEdge->start;
+      //theta = thetaPoses[next_target_vertex->thetaInd];
+      //theta_changed = true;
       returning = true;
       target_vertex->visited = true;
       return target_vertex;
@@ -222,6 +255,8 @@ public:
           next_target_vertex = search;
           next_target_vertex->visited = true;
           pulled_away = true;
+          //theta = thetaPoses[next_target_vertex->thetaInd];
+          //theta_changed = true;
           none_found = false;
           break;
         }
@@ -249,6 +284,8 @@ public:
         {
           target_vertex = vertices[i];
           target_vertex->visited = true;
+          theta = thetaPoses[target_vertex->thetaInd];
+          theta_changed = true;
           return target_vertex;
         }
       }
@@ -262,7 +299,7 @@ public:
     y_min = DBL_MAX;
     x_max = -DBL_MAX;
     y_max = -DBL_MAX;
-  
+   
     for(uint i = 0; i < vertices.size(); i++)
     {
       if( vertices[i]->x < x_min ){
@@ -340,13 +377,13 @@ void readGraph()
   {
     std::getline(infile, line);
     std::vector<std::string> tokens = split(line, ' ');
-
-    pg.vertices[i]->x = atof(tokens[1].c_str());
-    pg.vertices[i]->y = atof(tokens[2].c_str());
-    int num_neighbors= std::stoi(tokens[3] ,&sz);
+    pg.vertices[i]->thetaInd = std::stoi(tokens[1], &sz);
+    pg.vertices[i]->x = atof(tokens[2].c_str());
+    pg.vertices[i]->y = atof(tokens[3].c_str());
+    int num_neighbors= std::stoi(tokens[4] ,&sz);
     for(int j = 0; j < num_neighbors; j++)
     {
-      int neighborIdx = std::stoi(tokens[4 + j] ,&sz);
+      int neighborIdx = std::stoi(tokens[5 + j] ,&sz);
       Vertex * neighbor = pg.vertices[neighborIdx];
       neighbor->isChild = true;
       Edge * e =  new Edge(pg.vertices[i], neighbor);
@@ -414,9 +451,6 @@ void readGraph()
   int thread_id;
 
 
-
-
-
 #pragma omp parallel private(thread_id)
   {
     thread_id = omp_get_thread_num();
@@ -425,7 +459,7 @@ void readGraph()
 
       readGraph();
       opSpacePositionOrientationControl(rio,rgcm,dyn_scl,dyn_tao);
-    
+     
       //Then terminate
       scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running = false;
     }
@@ -468,11 +502,24 @@ void sendToRobot(scl::SRobotIO &robot_)
                      std::to_string(q[5]) + " " +
                      std::to_string(q[6]);
 
-        
-          std::cout << "SENDING POSITIONS: " << q << std::endl;
+         
+          // std::cout << "SENDING POSITIONS: " << q << std::endl;
           pub.send(msg);
       }
   }
+
+
+bool targetHit(Eigen::VectorXd x, Eigen::VectorXd x_des, bool targetBoard, double d_phi, bool isRotating) {
+  if(isRotating)
+    return d_phi < .025;
+  double Thresh = .009;
+  if (targetBoard) {
+    bool zHit = (x(2) - x_des(2) < 0);
+    return (x_des-x).norm() < Thresh && zHit;
+  } else {
+    return (x_des-x).norm() < Thresh;
+  }
+}
 
 
 static bool initialized = false;
@@ -482,7 +529,7 @@ bool receiveFromRobot(Eigen::VectorXd &q)
     // Initialize a 0MQ subscriber socket
     static zmqpp::context context;
     static zmqpp::socket sub(context, zmqpp::socket_type::subscribe);
-  
+   
 
     if (!initialized)
     {
@@ -514,15 +561,6 @@ bool receiveFromRobot(Eigen::VectorXd &q)
     return flag;
   }
 
-bool targetHit(Eigen::VectorXd x, Eigen::VectorXd x_des, bool targetBoard) {
-  double Thresh = .009;
-  if (targetBoard) {
-    bool zHit = (x(2) - x_des(2) < 0);
-    return (x_des-x).norm() < Thresh && zHit;
-  } else {
-    return (x_des-x).norm() < Thresh;
-  }
-}
 
 void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, scl::CDynamicsScl& dyn_scl, scl::CDynamicsTao &dyn_tao)
 {
@@ -565,16 +603,17 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
   while(true == scl_chai_glut_interface::CChaiGlobals::getData()->chai_glut_running)
   {
     Eigen::VectorXd q_recv_;
-    if (firstRun && !robotEnabled && receiveFromRobot(q_recv_))
-    {
-      firstRun = false;
-      std::cout << "Q Received! " << q_recv_ << std::endl;
-      rio.sensors_.q_ = q_recv_;
-      robotEnabled = true;
-      for(int i = 0; i < 7; i++)
-        rio.sensors_.dq_[i] = 0;    
-    }
-
+    // if (firstRun && !robotEnabled && receiveFromRobot(q_recv_))
+    // {
+    //   firstRun = false;
+    //   std::cout << "Q Received! " << q_recv_ << std::endl;
+    //   rio.sensors_.q_ = q_recv_;
+    //   robotEnabled = true;
+    //   for(int i = 0; i < 7; i++)
+    //     rio.sensors_.dq_[i] = 0;     
+    // }
+    firstRun = false;
+    robotEnabled = true;
 
 
     //get current time and compute the model
@@ -589,7 +628,7 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
       flag = true;
       q_init = rio.sensors_.q_;
     }
-  
+   
     // Compute your Jacobians
     dyn_scl.computeJacobianWithTransforms(J,*rhand,rio.sensors_.q_,hpos);
 
@@ -597,15 +636,16 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     A = rgcm.M_gc_;
     A_inv = rgcm.M_gc_inv_;
 
-    // gains  
-    double kp = 500;
-    double ko = 400;
-    double kv = 120;
+    // gains   
+    double kp = 600;
+    double ko = 300;
+    double kv = 150;
 
     double x_offs = target_vertex->x;
     double y_offs =  target_vertex->y;
     double z_offs =  pg.isPulledAway() ? OFF_CANVAS_Z_OFFS : ON_CANVAS_Z_OFFS;
     bool targetBoard = pg.isPulledAway() ? false : true;
+
 
     // current and desired position
     Eigen::VectorXd x = rhand->T_o_lnk_ * hpos;
@@ -613,30 +653,19 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     x_des << x_offs, y_offs, z_offs;
     x_des += x_init;
     Eigen::VectorXd dx = (x - x_des);
-    //if (dx.norm() < .009)
-    if(targetHit(x,x_des, targetBoard))
-    {
-      target_vertex = pg.getNextTarget();
-      if(target_vertex == NULL)
-        return;
-      double x_offs = target_vertex->x ;
-      double y_offs = target_vertex->y;
-      double z_offs = pg.isPulledAway() ? OFF_CANVAS_Z_OFFS : ON_CANVAS_Z_OFFS;
 
-      std::cout << "Going to target " << target_vertex->x  << " , " << target_vertex->y << std::endl;
-
-      x_des << x_offs, y_offs, z_offs;
-      x_des += x_init;
-      dx = (x - x_des);
-    }
 
     // current and desired orientations
     R = rhand->T_o_lnk_.rotation();
-    R_des << -1, 0, 0,
+    R_des <<  0, 0, 1,
               0, 1, 0,
-              0, 0, -1; 
+              -1, 0, 0;  
 
+    Rx << 1, 0, 0,
+          0, cos(theta), -sin(theta),
+          0, sin(theta), cos(theta);
 
+    R_des = Rx * R_des; 
 
     // angular error vector
     Eigen::Vector3d d_phi;
@@ -651,18 +680,37 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     }
 
     d_phi *= -.5;
+
+
+    if(targetHit(x,x_des, targetBoard, d_phi.norm(), pg.isThetaUpdating()))
+    {
+      std::cout << "TARGET HIT" << std::endl;
+      target_vertex = pg.getNextTarget();
+      if(target_vertex == NULL)
+        return;
+      double x_offs = target_vertex->x ;
+      double y_offs = target_vertex->y;
+      double z_offs = pg.isPulledAway() ? OFF_CANVAS_Z_OFFS : ON_CANVAS_Z_OFFS;
+
+      //std::cout << "Going to target " << target_vertex->x  << " , " << target_vertex->y << std::endl;
+
+      x_des << x_offs, y_offs, z_offs;
+      x_des += x_init;
+      dx = (x - x_des);
+    } 
+
     // current velocity
     Eigen::VectorXd dv = J * rio.sensors_.dq_;
 
     // Operational space Inertia matrix
     Lambda = J * A_inv * J.transpose();
     Lambda = Lambda.inverse();
-  
+   
     // Operational space controller force
     Eigen::VectorXd dp(6);
-    dp << kp * dx, ko * d_phi;  
+    dp << kp * dx, ko * d_phi;   
     F = Lambda * - ( dp + kv * dv);
-  
+   
     // joint space gravity
     Fg << 0, 0, -9.81, 0, 0, 0;
     g = J.transpose() * Fg;
@@ -673,29 +721,35 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
 
 
     Eigen::VectorXd ns_damping(6);
-   
+    
     Eigen::VectorXd joint_drift(7);
     Eigen::VectorXd ns_task(6);
     Eigen::MatrixXd J_bar = A_inv*J.transpose()*Lambda;
-   
+    
     Eigen::VectorXd damping_vec(7);
     damping_vec = rio.sensors_.dq_;
 
 
     joint_drift = (q_init - rio.sensors_.q_);
+    joint_drift[6] = 0;
 
     ns_damping = (Eigen::MatrixXd::Identity(6,6)-J.transpose()*J_bar.transpose())*rio.sensors_.dq_;
-   
+    
 
     ns_task = (Eigen::MatrixXd::Identity(6,6)-J.transpose()*J_bar.transpose())*(joint_drift);
 
 
-    rio.actuators_.force_gc_commanded_ = Gamma  - 13.0*ns_damping + 13.0 * ns_task;
+    rio.actuators_.force_gc_commanded_ = Gamma  - 13.0*ns_damping + 26.0 * ns_task;
 
-
+    if(theta_changed)
+    {
+      std::cout << "Theta changed" << std::endl;
+      rio.sensors_.q_(6) = theta;
+      theta_changed = false;
+    }
     // Integrate the dynamics
     dyn_tao.integrate(rio,dt); iter++; const timespec ts = {0, 5000};/*.05ms*/ nanosleep(&ts,NULL);
-    //rio.sensors_.q_(6) = theta;
+    
 
 
     if(!firstRun && iter % 8 == 0)
@@ -712,9 +766,10 @@ void opSpacePositionOrientationControl(scl::SRobotIO &rio, scl::SGcModel& rgcm, 
     // print output
     if(iter % 1000 == 0)
     {
-      //std::cout <<"\nDx norm:"<< dx.norm() << std::endl;
-      //std::cout<<"\n" << tcurr << " " << x.transpose() << " " << x_des.transpose() << " " <<d_phi.transpose();
-      //std::cout.flush();
+      std::cout <<"\nDPhi norm: " << d_phi.norm() << std::endl;
+      std::cout <<"\nDx norm:"<< dx.norm() << std::endl;
+      std::cout<<"\n" << tcurr << " " << x.transpose() << " " << x_des.transpose() << " " <<d_phi.transpose();
+      std::cout.flush();
    }
 
     /*********************************************************/
